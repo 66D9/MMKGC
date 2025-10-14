@@ -47,7 +47,7 @@ class WCGTrainerGP(object):
         self.use_gpu = use_gpu
         self.save_steps = save_steps
         self.checkpoint_dir = checkpoint_dir
-        
+
         # the generator part
         assert generator is not None
         assert mu is not None
@@ -59,97 +59,18 @@ class WCGTrainerGP(object):
         self.beta = 0.1
 
     def train_one_step(self, data):
-        ######################
-        # training D
-        ######################
+
         self.optimizer.zero_grad()
-        loss, p_score, real_embs = self.model({
+        loss = self.model({
             'batch_h': self.to_var(data['batch_h'], self.use_gpu),
             'batch_t': self.to_var(data['batch_t'], self.use_gpu),
             'batch_r': self.to_var(data['batch_r'], self.use_gpu),
             'batch_y': self.to_var(data['batch_y'], self.use_gpu),
             'mode': data['mode']
         })
-        real_embs = [
-            real_embs[0][:self.batch_size],
-            real_embs[1][:self.batch_size],
-            real_embs[2][:self.batch_size]
-        ]
-        # generate fake multimodal feature
-        batch_h_gen = self.to_var(data['batch_h'][0: self.batch_size], self.use_gpu)
-        batch_t_gen = self.to_var(data['batch_t'][0: self.batch_size], self.use_gpu)
-        batch_r = self.to_var(data['batch_r'][0: self.batch_size], self.use_gpu)
-        batch_hs, batch_hv, batch_ht = self.model.model.get_batch_ent_multimodal_embs(batch_h_gen)
-        batch_ts, batch_tv, batch_tt = self.model.model.get_batch_ent_multimodal_embs(batch_t_gen)
-        batch_gen_hv, batch_gen_ht = self.generator(batch_hs, batch_hv, batch_ht)
-        batch_gen_tv, batch_gen_tt = self.generator(batch_ts, batch_tv, batch_tt)
-        scores, fake_embs = self.model.model.get_fake_score(
-            batch_h=batch_h_gen,
-            batch_r=batch_r,
-            batch_t=batch_t_gen,
-            mode=data['mode'],
-            fake_hv=batch_gen_hv,
-            fake_tv=batch_gen_tv,
-            fake_ht=batch_gen_ht,
-            fake_tt=batch_gen_tt
-        )
-        # when training D: positive_score > fake_score
-        #### chang this loss
-        for score in scores:
-            # print(p_score.shape, score.shape)
-            # loss += self.model.loss(p_score, score) * self.mu
-            loss += self.mu * (-torch.mean(p_score) + torch.mean(score))
-        loss += self.mu * self.calc_gradient_penalty(real_embs, fake_embs)
         loss.backward()
         self.optimizer.step()
-        ######################
-        # training G
-        ######################
-        self.optimizer_g.zero_grad()
-        batch_hs, batch_hv, batch_ht = self.model.model.get_batch_ent_multimodal_embs(batch_h_gen)
-        batch_ts, batch_tv, batch_tt = self.model.model.get_batch_ent_multimodal_embs(batch_t_gen)
-        batch_gen_hv, batch_gen_ht = self.generator(batch_hs, batch_hv, batch_ht)
-        batch_gen_tv, batch_gen_tt = self.generator(batch_ts, batch_tv, batch_tt)
-        scores, _ = self.model.model.get_fake_score(
-            batch_h=batch_h_gen,
-            batch_r=batch_r,
-            batch_t=batch_t_gen,
-            mode=data['mode'],
-            fake_hv=batch_gen_hv,
-            fake_tv=batch_gen_tv,
-            fake_ht=batch_gen_ht,
-            fake_tt=batch_gen_tt
-        )
-        loss_g = 0.0
-        #### chang this loss
-        for score in scores:
-            loss_g += torch.mean(self.model.model.margin - score) / 3
-        loss_g.backward()
-        self.optimizer_g.step()
-        return loss.item(), loss_g.item()
-    
-    def calc_gradient_penalty(self, real_data, fake_data):
-        batchsize = real_data[0].shape[0]
-        alpha = torch.rand(batchsize, 1).cuda()
-        inter_h = alpha * real_data[0].detach() + ((1 - alpha) * fake_data[0].detach())
-        inter_r = alpha * real_data[1].detach() + ((1 - alpha) * fake_data[1].detach())
-        inter_t = alpha * real_data[2].detach() + ((1 - alpha) * fake_data[2].detach())
-        inter_h = torch.autograd.Variable(inter_h, requires_grad=True)
-        inter_r = torch.autograd.Variable(inter_r, requires_grad=True)
-        inter_t = torch.autograd.Variable(inter_t, requires_grad=True)
-        inters = [inter_h, inter_r, inter_t]
-        scores = self.model.model.cal_score(inters)
-
-        gradients = torch.autograd.grad(
-            outputs=scores,
-            inputs=inters,
-            grad_outputs=torch.ones(scores.size()).cuda(),
-            create_graph=True,
-            retain_graph=True,
-            only_inputs=True
-        )[0]
-        gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * self.beta #opt.GP_LAMBDA
-        return gradient_penalty
+        return loss.item()
 
     def run(self):
         if self.use_gpu:
@@ -163,15 +84,6 @@ class WCGTrainerGP(object):
                 lr=self.alpha,
                 weight_decay=self.weight_decay,
             )
-            self.optimizer_g = optim.Adam(
-                self.generator.parameters(),
-                lr=self.alpha_g,
-                weight_decay=self.weight_decay,
-            )
-            print(
-                "Learning Rate of D: {}\nLearning Rate of G: {}".format(
-                    self.alpha, self.alpha_g)
-            )
         else:
             raise NotImplementedError
         print("Finish initializing...")
@@ -179,12 +91,10 @@ class WCGTrainerGP(object):
         training_range = tqdm(range(self.train_times))
         for epoch in training_range:
             res = 0.0
-            res_g = 0.0
             for data in self.data_loader:
-                loss, loss_g = self.train_one_step(data)
+                loss = self.train_one_step(data)
                 res += loss
-                res_g += loss_g
-            training_range.set_description("Epoch %d | D loss: %f, G loss %f" % (epoch, res, res_g))
+            training_range.set_description("Epoch %d | D loss: %f" % (epoch, res))
 
             if self.save_steps and self.checkpoint_dir and (epoch + 1) % self.save_steps == 0:
                 print("Epoch %d has finished, saving..." % (epoch))

@@ -7,14 +7,14 @@ from .Model import Model
 class AdvRelRotatE(Model):
 
     def __init__(
-        self,
-        ent_tot,
-        rel_tot,
-        dim=100,
-        margin=6.0,
-        epsilon=2.0,
-        img_emb=None,
-        text_emb=None
+            self,
+            ent_tot,
+            rel_tot,
+            dim=100,
+            margin=6.0,
+            epsilon=2.0,
+            img_emb=None,
+            text_emb=None
     ):
 
         super(AdvRelRotatE, self).__init__(ent_tot, rel_tot)
@@ -79,26 +79,13 @@ class AdvRelRotatE(Model):
             nn.Linear(self.dim_e, 1)
         )
 
-    
-    def gated_fusion(self, emb, rel):
-        # emb: batch_size x dim
-        # rel: batch_size x dim
-        w = torch.sigmoid(emb * rel)
-        return w * emb + (1 - w) * rel
-        
-
     def get_joint_embeddings(self, es, ev, et, rg):
         e = torch.stack((es, ev, et), dim=1)
         u = torch.tanh(e)
         scores = self.ent_attn(u).squeeze(-1)
-        attention_weights = torch.softmax(scores / torch.sigmoid(rg), dim=-1) # Design of V8
+        attention_weights = torch.softmax(scores / torch.sigmoid(rg), dim=-1)  # Design of V8
         context_vectors = torch.sum(attention_weights.unsqueeze(-1) * e, dim=1)
         return context_vectors
-
-    
-    def cal_score(self, embs):
-        return self._calc(embs[0], embs[2], embs[1], "")
-    
 
     def _calc(self, h, t, r, mode):
         pi = self.pi_const
@@ -156,28 +143,10 @@ class AdvRelRotatE(Model):
         t_joint = self.get_joint_embeddings(t, t_img_emb, t_text_emb, rg)
         score = self.margin - self._calc(h_joint, t_joint, r, mode)
         return score
-    
-    def forward_and_return_embs(self, data):
-        batch_h = data['batch_h']
-        batch_t = data['batch_t']
-        batch_r = data['batch_r']
-        mode = data['mode']
-        h = self.ent_embeddings(batch_h)
-        t = self.ent_embeddings(batch_t)
-        r = self.rel_embeddings(batch_r)
-        h_img_emb = self.img_proj(self.img_embeddings(batch_h))
-        t_img_emb = self.img_proj(self.img_embeddings(batch_t))
-        h_text_emb = self.text_proj(self.text_embeddings(batch_h))
-        t_text_emb = self.text_proj(self.text_embeddings(batch_t))
-        rg = self.rel_gate(batch_r)
-        h_joint = self.get_joint_embeddings(h, h_img_emb, h_text_emb, rg)
-        t_joint = self.get_joint_embeddings(t, t_img_emb, t_text_emb, rg)
-        score = self.margin - self._calc(h_joint, t_joint, r, mode)
-        return score, [h_joint, r, t_joint]
-    
+
     def get_batch_ent_embs(self, data):
         return self.ent_embeddings(data)
-    
+
     def get_batch_vis_embs(self, data):
         return self.img_proj(self.img_embeddings(data))
 
@@ -185,38 +154,8 @@ class AdvRelRotatE(Model):
         return self.text_proj(self.text_embeddings(data))
 
     def get_batch_ent_multimodal_embs(self, data):
-        return self.ent_embeddings(data), self.img_proj(self.img_embeddings(data)), self.text_proj(self.text_embeddings(data))
-    
-    def get_fake_score(
-        self,
-        batch_h,
-        batch_r, 
-        batch_t,
-        mode,
-        fake_hv=None, 
-        fake_tv=None,
-        fake_ht=None,
-        fake_tt=None
-    ):
-        if fake_hv is None or fake_tv is None or fake_ht is None or fake_tt is None:
-            raise NotImplementedError
-        h = self.ent_embeddings(batch_h)
-        t = self.ent_embeddings(batch_t)
-        r = self.rel_embeddings(batch_r)
-        h_img_emb = self.img_proj(self.img_embeddings(batch_h))
-        t_img_emb = self.img_proj(self.img_embeddings(batch_t))
-        h_text_emb = self.text_proj(self.text_embeddings(batch_h))
-        t_text_emb = self.text_proj(self.text_embeddings(batch_t))
-        # the fake joint embedding
-        rg = self.rel_gate(batch_r)
-        h_joint = self.get_joint_embeddings(h, h_img_emb, h_text_emb, rg)
-        t_joint = self.get_joint_embeddings(t, t_img_emb, t_text_emb, rg)
-        h_fake = self.get_joint_embeddings(h, fake_hv, fake_ht, rg)
-        t_fake = self.get_joint_embeddings(t, fake_tv, fake_tt, rg)
-        score_h = self.margin - self._calc(h_fake, t_joint, r, mode)
-        score_t = self.margin - self._calc(h_joint, t_fake, r, mode)
-        score_all = self.margin - self._calc(h_fake, t_fake, r, mode)
-        return [score_h, score_t, score_all], [h_fake, r, t_fake]
+        return self.ent_embeddings(data), self.img_proj(self.img_embeddings(data)), self.text_proj(
+            self.text_embeddings(data))
 
     def predict(self, data):
         score = -self.forward(data)
@@ -233,25 +172,3 @@ class AdvRelRotatE(Model):
                  torch.mean(t ** 2) +
                  torch.mean(r ** 2)) / 3
         return regul
-    
-    def get_attention(self, es, ev, et):
-        # es, ev, et: [num_ent, emb_dim]
-        e = torch.stack((es, ev, et), dim=1)
-        u = torch.tanh(e)
-        scores = self.ent_attn(u).squeeze(-1)
-        attention_weights = torch.softmax(scores, dim=-1)
-        return attention_weights
-
-    def get_attention_weight(self, h, t):
-        h = torch.LongTensor([h])
-        t = torch.LongTensor([t])
-        h_s = self.ent_embeddings(h)
-        t_s = self.ent_embeddings(t)
-        h_img_emb = self.img_proj(self.img_embeddings(h))
-        t_img_emb = self.img_proj(self.img_embeddings(t))
-        h_text_emb = self.text_proj(self.text_embeddings(h))
-        t_text_emb = self.text_proj(self.text_embeddings(t))
-        # the fake joint embedding
-        h_attn = self.get_attention(h_s, h_img_emb, h_text_emb)
-        t_attn = self.get_attention(t_s, t_img_emb, t_text_emb)
-        return h_attn, t_attn
