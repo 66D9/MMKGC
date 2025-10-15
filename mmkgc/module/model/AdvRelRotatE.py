@@ -2,6 +2,7 @@ import torch
 import torch.autograd as autograd
 import torch.nn as nn
 from .Model import Model
+from .ModalCollaborativeKnowledgeExtractor import ModalCollaborativeKnowledgeExtractor
 
 
 class AdvRelRotatE(Model):
@@ -14,7 +15,12 @@ class AdvRelRotatE(Model):
             margin=6.0,
             epsilon=2.0,
             img_emb=None,
-            text_emb=None
+            text_emb=None,
+            use_knowledge_extractor=True,
+            num_heads=4,
+            num_layers=2,
+            dropout=0.1,
+            lambda_auxiliary=0.1
     ):
 
         super(AdvRelRotatE, self).__init__(ent_tot, rel_tot)
@@ -79,6 +85,18 @@ class AdvRelRotatE(Model):
             nn.Linear(self.dim_e, 1)
         )
 
+        # 模态协作知识提取模块
+        self.use_knowledge_extractor = use_knowledge_extractor
+        self.lambda_auxiliary = lambda_auxiliary
+        if self.use_knowledge_extractor:
+            self.knowledge_extractor = ModalCollaborativeKnowledgeExtractor(
+                dim=self.dim_e,
+                num_heads=num_heads,
+                num_layers=num_layers,
+                dropout=dropout,
+                use_modal_specific=True
+            )
+
     def get_joint_embeddings(self, es, ev, et, rg):
         e = torch.stack((es, ev, et), dim=1)
         u = torch.tanh(e)
@@ -139,23 +157,36 @@ class AdvRelRotatE(Model):
         h_text_emb = self.text_proj(self.text_embeddings(batch_h))
         t_text_emb = self.text_proj(self.text_embeddings(batch_t))
         rg = self.rel_gate(batch_r)
-        h_joint = self.get_joint_embeddings(h, h_img_emb, h_text_emb, rg)
-        t_joint = self.get_joint_embeddings(t, t_img_emb, t_text_emb, rg)
+
+        # 如果启用了模态协作知识提取模块
+        if self.use_knowledge_extractor:
+            # 对头实体应用知识提取
+            h_refined, h_auxiliary = self.knowledge_extractor(h, h_img_emb, h_text_emb)
+            h_struct_refined = h_refined['struct']
+            h_img_refined = h_refined['visual']
+            h_text_refined = h_refined['text']
+
+            # 对尾实体应用知识提取
+            t_refined, t_auxiliary = self.knowledge_extractor(t, t_img_emb, t_text_emb)
+            t_struct_refined = t_refined['struct']
+            t_img_refined = t_refined['visual']
+            t_text_refined = t_refined['text']
+
+            # 使用精细化后的嵌入进行联合嵌入
+            h_joint = self.get_joint_embeddings(h_struct_refined, h_img_refined, h_text_refined, rg)
+            t_joint = self.get_joint_embeddings(t_struct_refined, t_img_refined, t_text_refined, rg)
+
+            # 存储辅助输出用于损失计算
+            self.last_h_auxiliary = h_auxiliary
+            self.last_t_auxiliary = t_auxiliary
+        else:
+            # 原始方法：直接使用投影后的嵌入
+            h_joint = self.get_joint_embeddings(h, h_img_emb, h_text_emb, rg)
+            t_joint = self.get_joint_embeddings(t, t_img_emb, t_text_emb, rg)
+
         score = self.margin - self._calc(h_joint, t_joint, r, mode)
         return score
 
-    def get_batch_ent_embs(self, data):
-        return self.ent_embeddings(data)
-
-    def get_batch_vis_embs(self, data):
-        return self.img_proj(self.img_embeddings(data))
-
-    def get_batch_text_embs(self, data):
-        return self.text_proj(self.text_embeddings(data))
-
-    def get_batch_ent_multimodal_embs(self, data):
-        return self.ent_embeddings(data), self.img_proj(self.img_embeddings(data)), self.text_proj(
-            self.text_embeddings(data))
 
     def predict(self, data):
         score = -self.forward(data)
@@ -172,3 +203,63 @@ class AdvRelRotatE(Model):
                  torch.mean(t ** 2) +
                  torch.mean(r ** 2)) / 3
         return regul
+
+    def get_auxiliary_loss(self):
+        """
+        获取模态协作知识提取模块的辅助损失
+        该损失用于联合优化模型，促进模态间的对齐
+
+        Returns:
+            auxiliary_loss: 辅助损失值
+            loss_info: 损失详细信息字典
+        """
+        if not self.use_knowledge_extractor:
+            return torch.tensor(0.0), {}
+
+        if not hasattr(self, 'last_h_auxiliary') or not hasattr(self, 'last_t_auxiliary'):
+            return torch.tensor(0.0), {}
+
+        # 计算头实体和尾实体的辅助损失
+        h_aux_loss, h_loss_info = self.knowledge_extractor.compute_auxiliary_loss(
+            self.last_h_auxiliary, lambda_mse=self.lambda_auxiliary
+        )
+        t_aux_loss, t_loss_info = self.knowledge_extractor.compute_auxiliary_loss(
+            self.last_t_auxiliary, lambda_mse=self.lambda_auxiliary
+        )
+
+        # 平均头尾实体的辅助损失
+        total_aux_loss = (h_aux_loss + t_aux_loss) / 2.0
+
+        # 合并损失信息
+        loss_info = {
+            'head_' + k: v for k, v in h_loss_info.items()
+        }
+        loss_info.update({
+            'tail_' + k: v for k, v in t_loss_info.items()
+        })
+        loss_info['total_auxiliary_loss'] = total_aux_loss.item()
+
+        return total_aux_loss, loss_info
+
+    def get_refined_embeddings(self, entity_ids):
+        """
+        获取实体的精细化嵌入，用于下游任务（对齐、检索等）
+
+        Args:
+            entity_ids: [batch_size] 实体ID
+
+        Returns:
+            refined_embeddings: dict with keys 'struct', 'visual', 'text'
+        """
+        if not self.use_knowledge_extractor:
+            raise ValueError("Knowledge extractor is not enabled")
+
+        # 获取原始嵌入
+        struct_emb = self.ent_embeddings(entity_ids)
+        img_emb = self.img_proj(self.img_embeddings(entity_ids))
+        text_emb = self.text_proj(self.text_embeddings(entity_ids))
+
+        # 通过知识提取器获取精细化嵌入
+        refined, _ = self.knowledge_extractor(struct_emb, img_emb, text_emb)
+
+        return refined
