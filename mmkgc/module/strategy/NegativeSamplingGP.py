@@ -28,11 +28,12 @@ class NegativeSamplingGP(Strategy):
         return negative_score
 
     def forward(self, data, fast_return=False):
-        score = self.model.forward_and_return_embs(data)
+        score = self.model(data)
         p_score = self._get_positive_score(score)
         if fast_return:
             return p_score
         n_score = self._get_negative_score(score)
+        print('P_score:',p_score.mean().item(),'n_score:',n_score.mean().item())
         loss_res = self.loss(p_score, n_score)
         if self.regul_rate != 0:
             loss_res += self.regul_rate * self.model.regularization(data)

@@ -3,12 +3,12 @@ import argparse
 
 def get_args():
     arg = argparse.ArgumentParser()
-    arg.add_argument('-dataset', type=str, default='FB15K')
+    arg.add_argument('-dataset', type=str, default='MKG-Y')
     arg.add_argument('-batch_size', type=int, default=1024)
     arg.add_argument('-margin', type=float, default=6.0)
     arg.add_argument('-dim', type=int, default=128)
     arg.add_argument('-epoch', type=int, default=1000)
-    arg.add_argument('-save', type=str)
+    arg.add_argument('-save', type=str,default="./checkpoint/MKG-Y-1024-250-128-0.0001-4-1e-4-1e-4-1000")
     arg.add_argument('-img_dim', type=int, default=4096)
     arg.add_argument('-neg_num', type=int, default=1)
     arg.add_argument('-learning_rate', type=float, default=0.001)

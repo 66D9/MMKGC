@@ -4,7 +4,6 @@ from mmkgc.module.model import AdvRelRotatE
 from mmkgc.module.loss import SigmoidLoss
 from mmkgc.module.strategy import NegativeSamplingGP
 from mmkgc.data import TrainDataLoader, TestDataLoader
-from mmkgc.adv.modules import CombinedGenerator
 
 from args import get_args
 
@@ -49,11 +48,6 @@ if __name__ == "__main__":
         regul_rate=0.00001
     )
     
-    adv_generator = CombinedGenerator(
-        noise_dim=64,
-        structure_dim=2*args.dim,
-        img_dim=2*args.dim
-    )
     # train the model
     trainer = WCGTrainerGP(
         model=model,
@@ -62,8 +56,6 @@ if __name__ == "__main__":
         alpha=args.learning_rate,
         use_gpu=True,
         opt_method='Adam',
-        generator=adv_generator,
-        lrg=args.lrg,
         mu=args.mu
     )
 

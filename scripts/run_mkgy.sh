@@ -4,9 +4,9 @@ NUM_BATCH=1024
 MARGIN=4
 LR=1e-4
 LRG=1e-4
-NEG_NUM=128
+NEG_NUM=64
 MU=0.0001
-EPOCH=1000
+EPOCH=200
 
 CUDA_VISIBLE_DEVICES=0 nohup python run_adv_wgan_gp.py -dataset=$DATA \
   -batch_size=$NUM_BATCH \

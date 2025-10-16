@@ -26,8 +26,6 @@ class WCGTrainerGP(object):
                  opt_method="sgd",
                  save_steps=None,
                  checkpoint_dir=None,
-                 generator=None,
-                 lrg=None,
                  mu=None):
 
         self.work_threads = 8
@@ -39,8 +37,6 @@ class WCGTrainerGP(object):
         self.weight_decay = 0
         self.alpha = alpha
         # learning rate of the generator
-        assert lrg is not None
-        self.alpha_g = lrg
 
         self.model = model
         self.data_loader = data_loader
@@ -48,15 +44,6 @@ class WCGTrainerGP(object):
         self.save_steps = save_steps
         self.checkpoint_dir = checkpoint_dir
 
-        # the generator part
-        assert generator is not None
-        assert mu is not None
-        self.optimizer_g = None
-        self.generator = generator
-        self.batch_size = self.model.batch_size
-        self.generator.cuda()
-        self.mu = mu
-        self.beta = 0.1
 
     def train_one_step(self, data):
 
